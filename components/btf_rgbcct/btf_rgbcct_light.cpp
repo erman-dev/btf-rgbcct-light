@@ -18,6 +18,10 @@ static const char *const TAG = "btf_rgbcct";
 
 static constexpr size_t RMT_SYMBOLS_PER_BYTE = 8;
 static constexpr uint32_t POWER_ON_RESEND_MS = 200;
+// power_pin: time for the strip supply to settle before data is sent, and how long the strip
+// stays powered after it went dark.
+static constexpr uint32_t POWER_ON_DELAY_MS = 100;
+static constexpr uint32_t POWER_OFF_DELAY_MS = 2000;
 
 // Each segment is driven by two 3-channel chips: R, G, B | WW, CW, unused.
 static constexpr size_t BYTES_PER_PIXEL = 6;
@@ -75,20 +79,6 @@ void BtfRgbcctLight::setup() {
   memset(this->effect_data_, 0, this->num_leds_);
   memset(this->rmt_buf_, 0, this->wire_size_());
 
-  rmt_tx_channel_config_t channel;
-  memset(&channel, 0, sizeof(channel));
-  channel.clk_src = RMT_CLK_SRC_DEFAULT;
-  channel.resolution_hz = rmt_resolution_hz();
-  channel.gpio_num = gpio_num_t(this->pin_);
-  channel.mem_block_symbols = this->rmt_symbols_;
-  channel.trans_queue_depth = 1;
-  channel.flags.invert_out = this->inverted_;
-  if (rmt_new_tx_channel(&channel, &this->channel_) != ESP_OK) {
-    ESP_LOGE(TAG, "Channel creation failed");
-    this->mark_failed();
-    return;
-  }
-
   rmt_simple_encoder_config_t encoder;
   memset(&encoder, 0, sizeof(encoder));
   encoder.callback = encoder_callback;
@@ -100,16 +90,71 @@ void BtfRgbcctLight::setup() {
     return;
   }
 
-  if (rmt_enable(this->channel_) != ESP_OK) {
-    ESP_LOGE(TAG, "Enabling channel failed");
-    this->mark_failed();
+  if (this->power_pin_ != nullptr) {
+    // Strip unpowered and data line released until the light is turned on.
+    this->power_pin_->setup();
+    this->power_pin_->digital_write(false);
+    this->release_data_pin_();
     return;
   }
 
+  if (!this->start_channel_()) {
+    this->mark_failed();
+    return;
+  }
   // Blank the strip right away: overwrites whatever boot-time noise on the data line latched.
-  rmt_transmit_config_t config;
-  memset(&config, 0, sizeof(config));
-  rmt_transmit(this->channel_, this->encoder_, this->rmt_buf_, this->wire_size_(), &config);
+  this->transmit_();
+}
+
+bool BtfRgbcctLight::start_channel_() {
+  if (this->channel_ != nullptr)
+    return true;
+  rmt_tx_channel_config_t channel;
+  memset(&channel, 0, sizeof(channel));
+  channel.clk_src = RMT_CLK_SRC_DEFAULT;
+  channel.resolution_hz = rmt_resolution_hz();
+  channel.gpio_num = gpio_num_t(this->pin_);
+  channel.mem_block_symbols = this->rmt_symbols_;
+  channel.trans_queue_depth = 1;
+  channel.flags.invert_out = this->inverted_;
+  if (rmt_new_tx_channel(&channel, &this->channel_) != ESP_OK) {
+    ESP_LOGE(TAG, "Channel creation failed");
+    this->channel_ = nullptr;
+    return false;
+  }
+  if (rmt_enable(this->channel_) != ESP_OK) {
+    ESP_LOGE(TAG, "Enabling channel failed");
+    rmt_del_channel(this->channel_);
+    this->channel_ = nullptr;
+    return false;
+  }
+  return true;
+}
+
+void BtfRgbcctLight::release_data_pin_() {
+  if (this->channel_ != nullptr) {
+    rmt_tx_wait_all_done(this->channel_, 100);
+    rmt_disable(this->channel_);
+    rmt_del_channel(this->channel_);
+    this->channel_ = nullptr;
+  }
+  // Input with weak pull-down: no current into an unpowered strip, no noise on the line.
+  gpio_config_t io;
+  memset(&io, 0, sizeof(io));
+  io.pin_bit_mask = 1ULL << this->pin_;
+  io.mode = GPIO_MODE_INPUT;
+  io.pull_down_en = GPIO_PULLDOWN_ENABLE;
+  io.pull_up_en = GPIO_PULLUP_DISABLE;
+  gpio_config(&io);
+}
+
+void BtfRgbcctLight::power_off_() {
+  this->power_off_pending_ = false;
+  // Release data first: with a low-side switch, a driven data line would feed the chips once ground is cut.
+  this->release_data_pin_();
+  this->power_pin_->digital_write(false);
+  this->power_state_ = PowerState::OFF;
+  ESP_LOGD(TAG, "Strip power off");
 }
 
 void BtfRgbcctLight::init_led_params_() {
@@ -212,19 +257,66 @@ std::unique_ptr<light::LightTransformer> BtfRgbcctLight::create_default_transiti
 }
 
 void BtfRgbcctLight::write_state(light::LightState *state) {
-  if (this->channel_ == nullptr)
+  if (this->rmt_buf_ == nullptr || this->encoder_ == nullptr)
     return;
 
-  this->mark_shown_();
-
-  // When the strip goes from dark to lit, a power_supply may only be switching on now and the
-  // chips miss this frame. Send it again once the supply is up.
   bool lit = false;
   for (size_t i = 0; i < this->num_leds_ * 4u && !lit; i++)
     lit = this->rgbw_[i] != 0;
-  if (lit && !this->was_lit_)
-    this->set_timeout("resend", POWER_ON_RESEND_MS, [this]() { this->schedule_show(); });
-  this->was_lit_ = lit;
+
+  if (this->power_pin_ != nullptr) {
+    if (lit) {
+      if (this->power_off_pending_) {
+        this->cancel_timeout("power_off");
+        this->power_off_pending_ = false;
+      }
+      if (this->power_state_ == PowerState::OFF) {
+        // Power first, data once the supply has settled.
+        ESP_LOGD(TAG, "Strip power on");
+        this->power_pin_->digital_write(true);
+        this->power_state_ = PowerState::STARTING;
+        this->set_timeout("power_on", POWER_ON_DELAY_MS, [this]() {
+          if (!this->start_channel_()) {
+            this->status_set_warning();
+            return;
+          }
+          this->power_state_ = PowerState::ON;
+          this->schedule_show();
+        });
+        return;
+      }
+      if (this->power_state_ == PowerState::STARTING)
+        return;  // sent once powered
+    } else {
+      if (this->power_state_ == PowerState::STARTING) {
+        this->cancel_timeout("power_on");
+        this->power_pin_->digital_write(false);
+        this->power_state_ = PowerState::OFF;
+        return;
+      }
+      if (this->power_state_ == PowerState::OFF)
+        return;
+      // Send the dark frame below, then cut the supply.
+      if (!this->power_off_pending_) {
+        this->power_off_pending_ = true;
+        this->set_timeout("power_off", POWER_OFF_DELAY_MS, [this]() { this->power_off_(); });
+      }
+    }
+  } else {
+    this->mark_shown_();
+    // When the strip goes from dark to lit, a power_supply may only be switching on now and the
+    // chips miss this frame. Send it again once the supply is up.
+    if (lit && !this->was_lit_)
+      this->set_timeout("resend", POWER_ON_RESEND_MS, [this]() { this->schedule_show(); });
+    this->was_lit_ = lit;
+  }
+
+  this->transmit_();
+}
+
+void BtfRgbcctLight::transmit_() {
+  if (this->channel_ == nullptr)
+    return;
 
   // The previous frame is still read by RMT until it is done.
   if (rmt_tx_wait_all_done(this->channel_, 1000) != ESP_OK) {
@@ -239,8 +331,7 @@ void BtfRgbcctLight::write_state(light::LightState *state) {
 
   rmt_transmit_config_t config;
   memset(&config, 0, sizeof(config));
-  if (rmt_transmit(this->channel_, this->encoder_, this->rmt_buf_, this->wire_size_(), &config) !=
-      ESP_OK) {
+  if (rmt_transmit(this->channel_, this->encoder_, this->rmt_buf_, this->wire_size_(), &config) != ESP_OK) {
     ESP_LOGE(TAG, "RMT TX error");
     this->status_set_warning();
     return;
@@ -295,6 +386,7 @@ void BtfRgbcctLight::dump_config() {
                 this->pin_, this->rmt_symbols_, this->num_leds_,
                 1000000.0f / this->cold_white_mireds_, 1000000.0f / this->warm_white_mireds_,
                 YESNO(this->constant_brightness_), YESNO(this->color_interlock_));
+  LOG_PIN("  Power pin: ", this->power_pin_);
 }
 
 void BtfRgbcctTransformer::start() {

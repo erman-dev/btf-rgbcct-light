@@ -5,9 +5,11 @@
 #include "esphome/components/light/addressable_light.h"
 #include "esphome/core/color.h"
 #include "esphome/core/component.h"
+#include "esphome/core/gpio.h"
 #include "esphome/core/helpers.h"
 
 #include <esp_idf_version.h>
+#include <driver/gpio.h>
 #include <driver/rmt_tx.h>
 
 #if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 3, 0)
@@ -15,6 +17,8 @@
 #endif
 
 namespace esphome::btf_rgbcct {
+
+enum class PowerState : uint8_t { OFF, STARTING, ON };
 
 struct LedParams {
   rmt_symbol_word_t bit0;
@@ -48,6 +52,8 @@ class BtfRgbcctLight : public light::AddressableLight {
   void set_num_leds(uint16_t num_leds) { this->num_leds_ = num_leds; }
   void set_rmt_symbols(uint32_t rmt_symbols) { this->rmt_symbols_ = rmt_symbols; }
   void set_use_psram(bool use_psram) { this->use_psram_ = use_psram; }
+  /// Switches the strip supply: on before data is sent, off (after the data line is released) once dark.
+  void set_power_pin(GPIOPin *pin) { this->power_pin_ = pin; }
   void set_cold_white_temperature(float mireds) { this->cold_white_mireds_ = mireds; }
   void set_warm_white_temperature(float mireds) { this->warm_white_mireds_ = mireds; }
   void set_constant_brightness(bool constant_brightness) { this->constant_brightness_ = constant_brightness; }
@@ -69,6 +75,10 @@ class BtfRgbcctLight : public light::AddressableLight {
  protected:
   light::ESPColorView get_view_internal(int32_t index) const override;
   void init_led_params_();
+  bool start_channel_();
+  void release_data_pin_();
+  void power_off_();
+  void transmit_();
   void pack_wire_buffer_();
   size_t wire_size_() const;
 
@@ -86,6 +96,9 @@ class BtfRgbcctLight : public light::AddressableLight {
   bool inverted_{false};
   bool use_psram_{false};
   bool was_lit_{false};
+  GPIOPin *power_pin_{nullptr};
+  PowerState power_state_{PowerState::OFF};
+  bool power_off_pending_{false};
 
   float global_warm_{0.5f};
   float cold_white_mireds_{153.0f};

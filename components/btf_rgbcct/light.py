@@ -19,6 +19,8 @@ from esphome.const import (
 
 DEPENDENCIES = ["esp32"]
 
+CONF_POWER_PIN = "power_pin"
+
 btf_rgbcct_ns = cg.esphome_ns.namespace("btf_rgbcct")
 BtfRgbcctLight = btf_rgbcct_ns.class_("BtfRgbcctLight", light.AddressableLight)
 
@@ -35,6 +37,8 @@ CONFIG_SCHEMA = cv.All(
             cv.Required(CONF_PIN): pins.internal_gpio_output_pin_schema,
             # Number of segments (one chip pair each)
             cv.Required(CONF_NUM_LEDS): cv.positive_not_null_int,
+            # Plain on/off switch of the strip supply (not a PWM output)
+            cv.Optional(CONF_POWER_PIN): pins.gpio_output_pin_schema,
             cv.Optional(
                 CONF_COLD_WHITE_COLOR_TEMPERATURE, default="6500K"
             ): cv.color_temperature,
@@ -72,6 +76,9 @@ async def to_code(config):
     cg.add(var.set_pin(config[CONF_PIN][CONF_NUMBER]))
     if config[CONF_PIN][CONF_INVERTED]:
         cg.add(var.set_inverted(True))
+    if CONF_POWER_PIN in config:
+        power_pin = await cg.gpio_pin_expression(config[CONF_POWER_PIN])
+        cg.add(var.set_power_pin(power_pin))
     cg.add(var.set_cold_white_temperature(config[CONF_COLD_WHITE_COLOR_TEMPERATURE]))
     cg.add(var.set_warm_white_temperature(config[CONF_WARM_WHITE_COLOR_TEMPERATURE]))
     cg.add(var.set_constant_brightness(config[CONF_CONSTANT_BRIGHTNESS]))
