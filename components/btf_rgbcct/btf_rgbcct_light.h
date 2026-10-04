@@ -106,6 +106,7 @@ class BtfRgbcctLight : public light::AddressableLight {
   uint8_t bytes_per_pixel_{5};
   bool inverted_{false};
   bool use_psram_{false};
+  bool was_lit_{false};
 
   float global_warm_{0.5f};
   float cold_white_mireds_{153.0f};

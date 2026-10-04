@@ -17,6 +17,7 @@ namespace esphome::btf_rgbcct {
 static const char *const TAG = "btf_rgbcct";
 
 static constexpr size_t RMT_SYMBOLS_PER_BYTE = 8;
+static constexpr uint32_t POWER_ON_RESEND_MS = 200;
 
 // RMT default clock source frequency, varies by variant (80 MHz on most, 32 MHz on H2).
 static uint32_t rmt_resolution_hz() {
@@ -210,6 +211,15 @@ void BtfRgbcctLight::write_state(light::LightState *state) {
   }
   this->last_refresh_ = now;
   this->mark_shown_();
+
+  // When the strip goes from dark to lit, a power_supply may only be switching on now and the
+  // chips miss this frame. Send it again once the supply is up.
+  bool lit = false;
+  for (size_t i = 0; i < this->num_leds_ * 4u && !lit; i++)
+    lit = this->rgbw_[i] != 0;
+  if (lit && !this->was_lit_)
+    this->set_timeout("resend", POWER_ON_RESEND_MS, [this]() { this->schedule_show(); });
+  this->was_lit_ = lit;
 
   // The previous frame is still read by RMT until it is done.
   if (rmt_tx_wait_all_done(this->channel_, 1000) != ESP_OK) {

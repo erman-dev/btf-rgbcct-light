@@ -14,6 +14,14 @@ external_components:
   # local checkout instead:
   # - source: {type: local, path: components}
 
+# Switches the strip's supply off when all pixels are dark.
+# Set the pin to the board's strip power MOSFET/relay (see its stock IoTorero YAML).
+power_supply:
+  - id: strip_power
+    pin: GPIOXX
+    enable_time: 50ms
+    keep_on_time: 10s
+
 light:
   - platform: btf_rgbcct
     name: "BASEC"
@@ -28,7 +36,8 @@ light:
     cold_white_color_temperature: 6500 K
     constant_brightness: true
     color_interlock: true         # RGB or white, never both
-    color_correct: [20%, 20%, 20%, 20%]    # global power cap, raise step by step
+    color_correct: [20%, 20%, 20%, 20%]    # power cap per channel: [R, G, B, white]
+    power_supply: strip_power
     restore_mode: RESTORE_DEFAULT_OFF
     default_transition_length: 0.4s
     effects:
