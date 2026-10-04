@@ -94,6 +94,11 @@ void BtfRgbcctLight::setup() {
     this->mark_failed();
     return;
   }
+
+  // Blank the strip right away: overwrites whatever boot-time noise on the data line latched.
+  rmt_transmit_config_t config;
+  memset(&config, 0, sizeof(config));
+  rmt_transmit(this->channel_, this->encoder_, this->rmt_buf_, this->num_leds_ * WIRE_BYTES_PER_PIXEL, &config);
 }
 
 void BtfRgbcctLight::set_led_params(uint32_t bit0_high, uint32_t bit0_low, uint32_t bit1_high, uint32_t bit1_low,
