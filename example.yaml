@@ -1,0 +1,44 @@
+esphome:
+  name: btf-rgbcct
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+
+external_components:
+  - source: github://erman-dev/btf-rgbcct-light@claude/esphome-rgbcct-light-dfilxb
+    components: [btf_rgbcct]
+  # local checkout instead:
+  # - source: {type: local, path: components}
+
+light:
+  - platform: btf_rgbcct
+    name: "BASEC"
+    id: basec
+    pin: GPIO21
+    num_leds: 50                  # real 5-byte pixels
+    chipset: WS2812               # timings that worked in your test
+    rgb_order: RGB                # wire order R, G, B, WW, CW
+    white_order: WW_CW
+    warm_white_color_temperature: 3000 K   # check the strip's datasheet
+    cold_white_color_temperature: 6500 K
+    constant_brightness: true
+    color_interlock: true         # RGB or white, never both
+    color_correct: [20%, 20%, 20%, 20%]    # global power cap, raise step by step
+    restore_mode: RESTORE_DEFAULT_OFF
+    default_transition_length: 0.4s
+    effects:
+      - addressable_rainbow:
+      - addressable_lambda:
+          name: "CCT gradient"
+          update_interval: 100ms
+          lambda: |-
+            // white on every pixel, warm at the start, cold at the end
+            for (int i = 0; i < it.size(); i++) {
+              it[i] = Color(0, 0, 0, 255);
+              id(basec_out).set_pixel_warm_fraction(i, 1.0f - float(i) / (it.size() - 1));
+            }
+    output_id: basec_out
