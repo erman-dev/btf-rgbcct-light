@@ -26,29 +26,20 @@ light:
   - platform: btf_rgbcct
     name: "BASEC"
     id: basec
+    output_id: basec_out
     pin: GPIO21
-    num_leds: 50                  # segments (one IC group each)
-    bytes_per_pixel: 6            # R G B WW CW + 1 unused byte
-    chipset: WS2812               # timings that worked in your test
-    rgb_order: RGB                # wire order R, G, B, WW, CW
-    white_order: WW_CW
-    warm_white_color_temperature: 3000 K   # check the strip's datasheet
-    cold_white_color_temperature: 6500 K
-    constant_brightness: true
-    color_interlock: true         # RGB or white, never both
-    color_correct: [20%, 20%, 20%, 20%]    # power cap per channel: [R, G, B, white]
+    num_leds: 50                  # number of segments on the strip
+    color_correct: [88%, 88%, 88%, 100%]   # power cap per channel: [R, G, B, white]
     power_supply: strip_power
     restore_mode: RESTORE_DEFAULT_OFF
-    default_transition_length: 0.4s
+    default_transition_length: 0.2s
     effects:
       - addressable_rainbow:
       - addressable_lambda:
           name: "CCT gradient"
           update_interval: 100ms
           lambda: |-
-            // white on every pixel, warm at the start, cold at the end
             for (int i = 0; i < it.size(); i++) {
               it[i] = Color(0, 0, 0, 255);
               id(basec_out).set_pixel_warm_fraction(i, 1.0f - float(i) / (it.size() - 1));
             }
-    output_id: basec_out

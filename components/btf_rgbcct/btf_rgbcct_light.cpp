@@ -19,6 +19,15 @@ static const char *const TAG = "btf_rgbcct";
 static constexpr size_t RMT_SYMBOLS_PER_BYTE = 8;
 static constexpr uint32_t POWER_ON_RESEND_MS = 200;
 
+// Each segment is driven by two 3-channel chips: R, G, B | WW, CW, unused.
+static constexpr size_t BYTES_PER_PIXEL = 6;
+// WS2812-style bit timings (ns) and latch time, as tested on the strip.
+static constexpr uint32_t BIT0_HIGH_NS = 400;
+static constexpr uint32_t BIT0_LOW_NS = 1000;
+static constexpr uint32_t BIT1_HIGH_NS = 1000;
+static constexpr uint32_t BIT1_LOW_NS = 400;
+static constexpr uint32_t RESET_NS = 300000;
+
 // RMT default clock source frequency, varies by variant (80 MHz on most, 32 MHz on H2).
 static uint32_t rmt_resolution_hz() {
   uint32_t freq;
@@ -49,6 +58,8 @@ static size_t IRAM_ATTR HOT encoder_callback(const void *data, size_t size, size
 }
 
 void BtfRgbcctLight::setup() {
+  this->init_led_params_();
+
   RAMAllocator<uint8_t> allocator(this->use_psram_ ? 0 : RAMAllocator<uint8_t>::ALLOC_INTERNAL);
   this->rgbw_ = allocator.allocate(this->num_leds_ * 4);
   this->warm_ = allocator.allocate(this->num_leds_);
@@ -101,8 +112,10 @@ void BtfRgbcctLight::setup() {
   rmt_transmit(this->channel_, this->encoder_, this->rmt_buf_, this->wire_size_(), &config);
 }
 
-void BtfRgbcctLight::set_led_params(uint32_t bit0_high, uint32_t bit0_low, uint32_t bit1_high, uint32_t bit1_low,
-                                    uint32_t reset_time) {
+void BtfRgbcctLight::init_led_params_() {
+  const uint32_t bit0_high = BIT0_HIGH_NS, bit0_low = BIT0_LOW_NS;
+  const uint32_t bit1_high = BIT1_HIGH_NS, bit1_low = BIT1_LOW_NS;
+  const uint32_t reset_time = RESET_NS;
   float ratio = (float) rmt_resolution_hz() / 1e09f;
   this->params_.bit0.duration0 = (uint32_t) (ratio * bit0_high);
   this->params_.bit0.level0 = 1;
@@ -202,14 +215,6 @@ void BtfRgbcctLight::write_state(light::LightState *state) {
   if (this->channel_ == nullptr)
     return;
 
-  // Protect from refreshing too often; retry next loop so the change isn't lost.
-  uint32_t now = micros();
-  uint32_t rate = this->max_refresh_rate_.value_or(0);
-  if (rate != 0 && (now - this->last_refresh_) < rate) {
-    this->schedule_show();
-    return;
-  }
-  this->last_refresh_ = now;
   this->mark_shown_();
 
   // When the strip goes from dark to lit, a power_supply may only be switching on now and the
@@ -243,35 +248,12 @@ void BtfRgbcctLight::write_state(light::LightState *state) {
   this->status_clear_warning();
 }
 
-void BtfRgbcctLight::pack_wire_buffer_() {
-  // Wire offsets of R, G, B inside the first 3 bytes of a pixel.
-  uint8_t r = 0, g = 1, b = 2;
-  switch (this->rgb_order_) {
-    case ORDER_RGB:
-      r = 0, g = 1, b = 2;
-      break;
-    case ORDER_RBG:
-      r = 0, g = 2, b = 1;
-      break;
-    case ORDER_GRB:
-      r = 1, g = 0, b = 2;
-      break;
-    case ORDER_GBR:
-      r = 2, g = 0, b = 1;
-      break;
-    case ORDER_BGR:
-      r = 2, g = 1, b = 0;
-      break;
-    case ORDER_BRG:
-      r = 1, g = 2, b = 0;
-      break;
-  }
-  const uint8_t ww_pos = this->white_order_ == WHITE_ORDER_WW_CW ? 3 : 4;
-  const uint8_t cw_pos = this->white_order_ == WHITE_ORDER_WW_CW ? 4 : 3;
+size_t BtfRgbcctLight::wire_size_() const { return this->num_leds_ * BYTES_PER_PIXEL; }
 
+void BtfRgbcctLight::pack_wire_buffer_() {
   for (uint16_t p = 0; p < this->num_leds_; p++) {
     const uint8_t *px = &this->rgbw_[p * 4];
-    uint8_t *out = &this->rmt_buf_[p * this->bytes_per_pixel_];
+    uint8_t *out = &this->rmt_buf_[p * BYTES_PER_PIXEL];
     const uint16_t w = px[3];
     const uint16_t k = this->warm_[p];
     uint16_t ww, cw;
@@ -287,11 +269,12 @@ void BtfRgbcctLight::pack_wire_buffer_() {
       cw = w;
       ww = (w * k + (255 - k) / 2) / (255 - k);
     }
-    out[r] = px[0];
-    out[g] = px[1];
-    out[b] = px[2];
-    out[ww_pos] = ww;
-    out[cw_pos] = cw;
+    // Wire order: R, G, B | WW, CW, unused (stays 0)
+    out[0] = px[0];
+    out[1] = px[1];
+    out[2] = px[2];
+    out[3] = ww;
+    out[4] = cw;
   }
 }
 
@@ -305,14 +288,11 @@ void BtfRgbcctLight::dump_config() {
                 "BTF RGBCCT light:\n"
                 "  Pin: %u\n"
                 "  RMT symbols: %" PRIu32 "\n"
-                "  Max refresh rate: %" PRIu32 " us\n"
-                "  Pixels: %u (%u bytes each)\n"
-                "  White order: %s\n"
+                "  Pixels: %u\n"
                 "  Cold/warm white: %.0f K / %.0f K\n"
                 "  Constant brightness: %s\n"
                 "  Color interlock: %s",
-                this->pin_, this->rmt_symbols_, this->max_refresh_rate_.value_or(0), this->num_leds_, this->bytes_per_pixel_,
-                this->white_order_ == WHITE_ORDER_WW_CW ? "WW, CW" : "CW, WW",
+                this->pin_, this->rmt_symbols_, this->num_leds_,
                 1000000.0f / this->cold_white_mireds_, 1000000.0f / this->warm_white_mireds_,
                 YESNO(this->constant_brightness_), YESNO(this->color_interlock_));
 }
