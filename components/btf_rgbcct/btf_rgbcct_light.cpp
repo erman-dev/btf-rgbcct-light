@@ -220,6 +220,8 @@ void BtfRgbcctLight::write_state(light::LightState *state) {
   }
 
   this->pack_wire_buffer_();
+  ESP_LOGV(TAG, "Pixel 0 wire bytes: %02X %02X %02X %02X %02X", this->rmt_buf_[0], this->rmt_buf_[1],
+           this->rmt_buf_[2], this->rmt_buf_[3], this->rmt_buf_[4]);
 
   rmt_transmit_config_t config;
   memset(&config, 0, sizeof(config));
