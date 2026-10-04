@@ -36,7 +36,7 @@ struct LedParams {
   rmt_symbol_word_t reset;
 };
 
-/// RGB + warm white + cold white addressable strip (5 bytes per pixel, e.g. WS2805), sent over RMT.
+/// RGB + warm white + cold white addressable strip (5 or 6 bytes per pixel), sent over RMT.
 ///
 /// Effects see a normal RGBW pixel. W is the white brightness, split into WW/CW by a
 /// per-pixel color temperature that follows the light's color temperature slider.
@@ -64,6 +64,7 @@ class BtfRgbcctLight : public light::AddressableLight {
   void set_max_refresh_rate(uint32_t interval_us) { this->max_refresh_rate_ = interval_us; }
   void set_led_params(uint32_t bit0_high, uint32_t bit0_low, uint32_t bit1_high, uint32_t bit1_low,
                       uint32_t reset_time);
+  void set_bytes_per_pixel(uint8_t bytes) { this->bytes_per_pixel_ = bytes; }
   void set_rgb_order(RGBOrder order) { this->rgb_order_ = order; }
   void set_white_order(WhiteOrder order) { this->white_order_ = order; }
   void set_cold_white_temperature(float mireds) { this->cold_white_mireds_ = mireds; }
@@ -87,11 +88,12 @@ class BtfRgbcctLight : public light::AddressableLight {
  protected:
   light::ESPColorView get_view_internal(int32_t index) const override;
   void pack_wire_buffer_();
+  size_t wire_size_() const { return this->num_leds_ * this->bytes_per_pixel_; }
 
   uint8_t *rgbw_{nullptr};         // 4 bytes per pixel: R, G, B, W (after gamma + color correction)
   uint8_t *warm_{nullptr};         // 1 byte per pixel: warm share of W, 0..255
   uint8_t *effect_data_{nullptr};  // 1 byte per pixel
-  uint8_t *rmt_buf_{nullptr};      // 5 bytes per pixel in wire order, owned by RMT while sending
+  uint8_t *rmt_buf_{nullptr};      // bytes_per_pixel_ per pixel in wire order (6th byte unused), owned by RMT while sending
 
   LedParams params_{};
   rmt_channel_handle_t channel_{nullptr};
@@ -101,6 +103,7 @@ class BtfRgbcctLight : public light::AddressableLight {
   optional<uint32_t> max_refresh_rate_{};
   uint16_t num_leds_{0};
   uint8_t pin_{0};
+  uint8_t bytes_per_pixel_{5};
   bool inverted_{false};
   bool use_psram_{false};
 

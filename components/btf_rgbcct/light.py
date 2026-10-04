@@ -23,6 +23,7 @@ from esphome.const import (
 DEPENDENCIES = ["esp32"]
 
 CONF_WHITE_ORDER = "white_order"
+CONF_BYTES_PER_PIXEL = "bytes_per_pixel"
 CONF_BIT0_HIGH = "bit0_high"
 CONF_BIT0_LOW = "bit0_low"
 CONF_BIT1_HIGH = "bit1_high"
@@ -68,6 +69,8 @@ CONFIG_SCHEMA = cv.All(
             cv.Required(CONF_PIN): pins.internal_gpio_output_pin_schema,
             cv.Required(CONF_NUM_LEDS): cv.positive_not_null_int,
             cv.Optional(CONF_RGB_ORDER, default="RGB"): cv.enum(RGB_ORDERS, upper=True),
+            # 6 for segments driven by two 3-channel chips (R G B | WW CW unused)
+            cv.Optional(CONF_BYTES_PER_PIXEL, default=5): cv.one_of(5, 6, int=True),
             cv.Optional(CONF_WHITE_ORDER, default="WW_CW"): cv.enum(
                 WHITE_ORDERS, upper=True
             ),
@@ -133,6 +136,7 @@ async def to_code(config):
         timings = CHIPSETS[config.get(CONF_CHIPSET, "WS2812")]
     cg.add(var.set_led_params(*timings, config[CONF_RESET_TIME]))
 
+    cg.add(var.set_bytes_per_pixel(config[CONF_BYTES_PER_PIXEL]))
     cg.add(var.set_rgb_order(config[CONF_RGB_ORDER]))
     cg.add(var.set_white_order(config[CONF_WHITE_ORDER]))
     cg.add(var.set_cold_white_temperature(config[CONF_COLD_WHITE_COLOR_TEMPERATURE]))

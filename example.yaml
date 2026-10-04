@@ -19,7 +19,8 @@ light:
     name: "BASEC"
     id: basec
     pin: GPIO21
-    num_leds: 50                  # real 5-byte pixels
+    num_leds: 50                  # segments (one IC group each)
+    bytes_per_pixel: 6            # R G B WW CW + 1 unused byte
     chipset: WS2812               # timings that worked in your test
     rgb_order: RGB                # wire order R, G, B, WW, CW
     white_order: WW_CW

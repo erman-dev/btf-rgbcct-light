@@ -16,7 +16,6 @@ namespace esphome::btf_rgbcct {
 
 static const char *const TAG = "btf_rgbcct";
 
-static constexpr size_t WIRE_BYTES_PER_PIXEL = 5;
 static constexpr size_t RMT_SYMBOLS_PER_BYTE = 8;
 
 // RMT default clock source frequency, varies by variant (80 MHz on most, 32 MHz on H2).
@@ -53,7 +52,7 @@ void BtfRgbcctLight::setup() {
   this->rgbw_ = allocator.allocate(this->num_leds_ * 4);
   this->warm_ = allocator.allocate(this->num_leds_);
   this->effect_data_ = allocator.allocate(this->num_leds_);
-  this->rmt_buf_ = allocator.allocate(this->num_leds_ * WIRE_BYTES_PER_PIXEL);
+  this->rmt_buf_ = allocator.allocate(this->wire_size_());
   if (this->rgbw_ == nullptr || this->warm_ == nullptr || this->effect_data_ == nullptr || this->rmt_buf_ == nullptr) {
     ESP_LOGE(TAG, "Cannot allocate LED buffers!");
     this->mark_failed();
@@ -62,7 +61,7 @@ void BtfRgbcctLight::setup() {
   memset(this->rgbw_, 0, this->num_leds_ * 4);
   memset(this->warm_, light::to_uint8_scale(this->global_warm_), this->num_leds_);
   memset(this->effect_data_, 0, this->num_leds_);
-  memset(this->rmt_buf_, 0, this->num_leds_ * WIRE_BYTES_PER_PIXEL);
+  memset(this->rmt_buf_, 0, this->wire_size_());
 
   rmt_tx_channel_config_t channel;
   memset(&channel, 0, sizeof(channel));
@@ -98,7 +97,7 @@ void BtfRgbcctLight::setup() {
   // Blank the strip right away: overwrites whatever boot-time noise on the data line latched.
   rmt_transmit_config_t config;
   memset(&config, 0, sizeof(config));
-  rmt_transmit(this->channel_, this->encoder_, this->rmt_buf_, this->num_leds_ * WIRE_BYTES_PER_PIXEL, &config);
+  rmt_transmit(this->channel_, this->encoder_, this->rmt_buf_, this->wire_size_(), &config);
 }
 
 void BtfRgbcctLight::set_led_params(uint32_t bit0_high, uint32_t bit0_low, uint32_t bit1_high, uint32_t bit1_low,
@@ -225,7 +224,7 @@ void BtfRgbcctLight::write_state(light::LightState *state) {
 
   rmt_transmit_config_t config;
   memset(&config, 0, sizeof(config));
-  if (rmt_transmit(this->channel_, this->encoder_, this->rmt_buf_, this->num_leds_ * WIRE_BYTES_PER_PIXEL, &config) !=
+  if (rmt_transmit(this->channel_, this->encoder_, this->rmt_buf_, this->wire_size_(), &config) !=
       ESP_OK) {
     ESP_LOGE(TAG, "RMT TX error");
     this->status_set_warning();
@@ -262,7 +261,7 @@ void BtfRgbcctLight::pack_wire_buffer_() {
 
   for (uint16_t p = 0; p < this->num_leds_; p++) {
     const uint8_t *px = &this->rgbw_[p * 4];
-    uint8_t *out = &this->rmt_buf_[p * WIRE_BYTES_PER_PIXEL];
+    uint8_t *out = &this->rmt_buf_[p * this->bytes_per_pixel_];
     const uint16_t w = px[3];
     const uint16_t k = this->warm_[p];
     uint16_t ww, cw;
@@ -297,12 +296,12 @@ void BtfRgbcctLight::dump_config() {
                 "  Pin: %u\n"
                 "  RMT symbols: %" PRIu32 "\n"
                 "  Max refresh rate: %" PRIu32 " us\n"
-                "  Pixels: %u (5 bytes each)\n"
+                "  Pixels: %u (%u bytes each)\n"
                 "  White order: %s\n"
                 "  Cold/warm white: %.0f K / %.0f K\n"
                 "  Constant brightness: %s\n"
                 "  Color interlock: %s",
-                this->pin_, this->rmt_symbols_, this->max_refresh_rate_.value_or(0), this->num_leds_,
+                this->pin_, this->rmt_symbols_, this->max_refresh_rate_.value_or(0), this->num_leds_, this->bytes_per_pixel_,
                 this->white_order_ == WHITE_ORDER_WW_CW ? "WW, CW" : "CW, WW",
                 1000000.0f / this->cold_white_mireds_, 1000000.0f / this->warm_white_mireds_,
                 YESNO(this->constant_brightness_), YESNO(this->color_interlock_));
