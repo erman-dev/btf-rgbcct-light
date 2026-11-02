@@ -18,7 +18,7 @@
 
 namespace esphome::btf_rgbcct {
 
-enum class PowerState : uint8_t { OFF, STARTING, ON };
+enum class PowerState : uint8_t { OFF, ON };
 
 struct LedParams {
   rmt_symbol_word_t bit0;
@@ -99,6 +99,7 @@ class BtfRgbcctLight : public light::AddressableLight {
   GPIOPin *power_pin_{nullptr};
   PowerState power_state_{PowerState::OFF};
   bool power_off_pending_{false};
+  uint16_t burst_left_{0};
 
   float global_warm_{0.5f};
   float cold_white_mireds_{153.0f};
