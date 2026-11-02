@@ -9,7 +9,7 @@ esp32:
 logger:
 
 external_components:
-  - source: github://erman-dev/btf-rgbcct-light@claude/esphome-rgbcct-light-dfilxb
+  - source: github://erman-dev/btf-rgbcct-light@main
     components: [btf_rgbcct]
   # local checkout instead:
   # - source: {type: local, path: components}
