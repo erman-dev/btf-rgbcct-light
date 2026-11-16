@@ -18,10 +18,10 @@ static const char *const TAG = "btf_rgbcct";
 
 static constexpr size_t RMT_SYMBOLS_PER_BYTE = 8;
 static constexpr uint32_t POWER_ON_RESEND_MS = 200;
-// After the supply switches on, frames are sent back to back for this long, so the chips latch
-// the right color as soon as their logic is up instead of showing their power-on default.
-static constexpr uint32_t POWER_ON_BURST_MS = 150;
-static constexpr uint32_t POWER_ON_BURST_INTERVAL_MS = 8;
+// After the supply switches on, frames are sent back to back (no gap but the latch) for this long,
+// so cold chips latch the right color as soon as their logic is up instead of showing their
+// power-on default (white).
+static constexpr uint32_t POWER_ON_BURST_MS = 500;
 // power_pin: how long the strip stays powered after it went dark.
 static constexpr uint32_t POWER_OFF_DELAY_MS = 2000;
 // The current frame is resent this often, so a re-plugged strip leaves its power-on default.
@@ -113,6 +113,19 @@ void BtfRgbcctLight::setup() {
   this->transmit_();
 }
 
+void BtfRgbcctLight::loop() {
+  if (!this->burst_active_)
+    return;
+  if (this->channel_ == nullptr || millis() - this->burst_start_ > POWER_ON_BURST_MS) {
+    this->burst_active_ = false;
+    this->high_freq_.stop();
+    return;
+  }
+  // Next frame as soon as the previous one is out.
+  if (rmt_tx_wait_all_done(this->channel_, 0) == ESP_OK)
+    this->transmit_();
+}
+
 bool BtfRgbcctLight::start_channel_() {
   if (this->channel_ != nullptr)
     return true;
@@ -157,7 +170,10 @@ void BtfRgbcctLight::release_data_pin_() {
 
 void BtfRgbcctLight::power_off_() {
   this->power_off_pending_ = false;
-  this->cancel_interval("power_on");
+  if (this->burst_active_) {
+    this->burst_active_ = false;
+    this->high_freq_.stop();
+  }
   // Release data first: with a low-side switch, a driven data line would feed the chips once ground is cut.
   this->release_data_pin_();
   this->power_pin_->digital_write(false);
@@ -287,12 +303,11 @@ void BtfRgbcctLight::write_state(light::LightState *state) {
         ESP_LOGD(TAG, "Strip power on");
         this->power_pin_->digital_write(true);
         this->power_state_ = PowerState::ON;
-        this->burst_left_ = POWER_ON_BURST_MS / POWER_ON_BURST_INTERVAL_MS;
-        this->set_interval("power_on", POWER_ON_BURST_INTERVAL_MS, [this]() {
-          this->transmit_();
-          if (--this->burst_left_ == 0)
-            this->cancel_interval("power_on");
-        });
+        this->burst_start_ = millis();
+        if (!this->burst_active_) {
+          this->burst_active_ = true;
+          this->high_freq_.start();
+        }
       }
     } else {
       if (this->power_state_ == PowerState::OFF)

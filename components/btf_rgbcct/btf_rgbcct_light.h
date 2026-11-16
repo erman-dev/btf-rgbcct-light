@@ -34,6 +34,7 @@ struct LedParams {
 class BtfRgbcctLight : public light::AddressableLight {
  public:
   void setup() override;
+  void loop() override;
   void write_state(light::LightState *state) override;
   void update_state(light::LightState *state) override;
   void dump_config() override;
@@ -99,7 +100,9 @@ class BtfRgbcctLight : public light::AddressableLight {
   GPIOPin *power_pin_{nullptr};
   PowerState power_state_{PowerState::OFF};
   bool power_off_pending_{false};
-  uint16_t burst_left_{0};
+  uint32_t burst_start_{0};
+  bool burst_active_{false};
+  HighFrequencyLoopRequester high_freq_;
 
   float global_warm_{0.5f};
   float cold_white_mireds_{153.0f};
